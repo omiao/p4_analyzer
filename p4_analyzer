@@ -1,0 +1,204 @@
+#!/usr/bin/env python
+# -*-encoding: utf-8-*-
+# @Date    : 2015-07-13 11:13:55
+# @Author  : Miao Guodong
+# @Version : 0.1
+
+"""
+Author: Miao Guodong
+Description:
+    This script is used to get and analyze changelist from depot of p4 server according with
+    the information of branch, username and etc.
+"""
+
+
+import sys
+import os
+import os.path
+import argparse
+import re
+import multiprocessing
+import time
+
+
+def manCreate():
+    """Description: Create mannaul for this tool
+
+    :returns: return the argument object
+
+    """
+
+    # Firstly, we need to create a mannual of this script tool
+    parser = argparse.ArgumentParser(prog="p4_analyzer",
+                                     description="This tool is used to analyze user \
+                                     statistics in p4 branches.",
+                                     epilog="Version 0.1, Bug report to <gmiao@sonicwall.com>")
+
+    # For positional option, we need branch name.
+    parser.add_argument('branch', nargs='+',
+                        help='Specify branch names that need to analyze.',
+                        )
+    parser.add_argument('-u', '--user',
+                        help='Specify user that submit change in the branch',
+                        metavar='user', dest='user')
+    parser.add_argument('-f', '--output',
+                        help='Specify file used to store the output',
+                        metavar='output', dest='outputFile')
+    parser.add_argument('-p', '--pattern',
+                        help='Specify python pattern used to match user',
+                        metavar='pattern')
+    parser.add_argument('-m', '--merged', action='store_const',
+                        const=True, default=False,
+                        help='Specify if we need to analyze on the description of the change',
+                        dest='merged')
+
+    args = parser.parse_args()
+    return args
+
+
+def multiproccess(func):
+    def multicall(*argss, **kwargs):
+        process = multiprocessing.Process(target=func, args=argss)
+        process.start()
+    return multicall
+
+
+#@multiproccess
+def getChangeListFromP4Branch(branch, user):
+    """ This is a generator that create data with p4 command
+        and send the data to coroutine from the process
+    :returns: None
+    """
+    os.system("p4 changes -s submitted" + user + branch + " >> .changelists")
+
+
+def getChangeFromBranch(user, branch, merged=False, pattern=r'Changelist (\d*) by (\w*)\:'):
+    """TODO: Docstring for getChangeFromBranch.
+
+    :user: username that specified to analyze
+    :branch: the branches in p4 that need to analyze
+    :returns: a list of change for the specified user
+
+    """
+
+    for br in branch:
+        # To accelate the performace we have to use multiprocessing
+        item = " -t " + br
+        os.system("p4 changes -s submitted" + user + item + " > .changelists")
+
+    # Open the file with all changelists in it and try to get changelist number
+    # from the changelist description.
+    changePattern = re.compile(r'Change (\d*)')
+    userList = []
+    for changelist in open('.changelists', 'r'):
+        changeMatch = changePattern.match(changelist)
+        if changeMatch:
+            changeNum = changeMatch.group(1)
+
+            if merged:
+                # Now that we already have the number of changelist
+                # we can get the whole description and get infomation we need
+                number = " -s " + changeNum
+
+                try:
+                    os.system("p4 describe" + number + ' > .description')
+                    with open('.description', 'r') as fp:
+                        description = fp.read()
+                    fp.close()
+
+                except:
+                    print "Problem on getting p4 describe\n"
+
+                # We may need to specify the pattern used to search from merged
+                # changelists
+                if description:
+                    userPattern = re.compile(pattern)
+                    userMatch = userPattern.findall(description)
+                    if userMatch:
+                        # Get the last one of the matched pattern
+                        (change, username) = userMatch[-1]
+                        # print username + "-->" + change
+                        userList.append((username, change))
+            else:
+                userList.append(changeNum)
+
+    return userList
+
+
+def anlyzeAndCal(userList, filename):
+    """TODO: Docstring for anlyzeAndCal.
+
+    :userList: The list that stores the user and change number
+    """
+    name = 'branch.txt'
+    print name + " has been created\n"
+    f = open(name, 'w')
+    f.write("Total Number of Changelists is " + str(len(userList)) + "\n\n")
+
+    f.write("Here is statistic for all developers:\n")
+    count = dict()
+    for (key, value) in userList:
+        if key in count:
+            count[key] = count[key] + 1
+            print key + " = " + str(count[key])
+        else:
+            count.setdefault(key, 1)
+
+    print count.items()
+
+    for (key, value) in count.iteritems():
+        f.write(key + "\t" + str(value) + "\n")
+    f.write("\n\n")
+
+    f.write("Here lists the change name maps:\n")
+    for (key, value) in userList:
+        f.write(value + "-->" + key + "\n")
+
+    f.close()
+
+
+def main():
+    """
+    Description: The main entry of the tool
+    """
+
+    try:
+        args = manCreate()
+
+        # Check the arguments of the command and find the correct route to get info
+        if args:
+            branch = args.branch
+
+            # try to find optional argument
+            if args.user:
+                user = " -u " + args.user
+            else:
+                user = ''
+
+            merged = args.merged
+
+            if args.outputFile:
+                filename = args.outputFile
+            else:
+                filename = 'branch.txt'
+
+            # Get change numbers from branches with name and patterns
+            if args.pattern:
+                userList = getChangeFromBranch(user, branch, args.merged, args.pattern)
+            else:
+                userList = getChangeFromBranch(user, branch, args.merged)
+
+            # Now with userlist, we can analyze and get statistics
+            if userList and filename:
+                anlyzeAndCal(userList, filename)
+            else:
+                print "No Data!\n"
+
+    except:
+        print 'Please refer to the tool man to get the correct command'
+    finally:
+        sys.exit()
+
+# The main entry of this script.
+if __name__ == '__main__':
+    main()
